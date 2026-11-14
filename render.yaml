@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: hayzenxcr-agent-games
+    env: node
+    plan: free
+    buildCommand: npm ci && npm run build && node scripts/download-circuits.mjs
+    startCommand: node dist/server.js
+    healthCheckPath: /health
+    envVars:
+      - key: AGENT_GAMES_HMAC_SECRET
+        sync: false
+      - key: KURIER_API_KEY
+        sync: false
+      - key: STRATEGY_SALT
+        sync: false
