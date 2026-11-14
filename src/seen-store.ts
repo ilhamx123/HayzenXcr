@@ -12,9 +12,15 @@ const MAX_ENTRIES = 10_000;
 export class SeenStore {
   private readonly filePath: string;
   private readonly seen = new Set<string>();
+  private saveFailedWarned = false;
 
   constructor(dataDir: string) {
-    if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
+    try {
+      if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
+    } catch {
+      // Read-only filesystem (serverless): keep the in-memory set only.
+      // save() below fails soft, so requests never die on persistence.
+    }
     this.filePath = join(dataDir, "seen.json");
     this.load();
   }
@@ -35,9 +41,20 @@ export class SeenStore {
   }
 
   private save(): void {
-    const tmp = `${this.filePath}.tmp`;
-    writeFileSync(tmp, JSON.stringify([...this.seen], null, 2), "utf8");
-    renameSync(tmp, this.filePath);
+    try {
+      const tmp = `${this.filePath}.tmp`;
+      writeFileSync(tmp, JSON.stringify([...this.seen], null, 2), "utf8");
+      renameSync(tmp, this.filePath);
+    } catch (err) {
+      // Fail soft: the in-memory set still dedupes within this process.
+      // (Warn once per instance to avoid spamming the logs.)
+      if (!this.saveFailedWarned) {
+        this.saveFailedWarned = true;
+        console.warn(
+          `[seen-store] cannot persist ${this.filePath}: ${err instanceof Error ? err.message : err} (in-memory only)`,
+        );
+      }
+    }
   }
 
   has(proofTx: string): boolean {
