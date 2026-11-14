@@ -27,6 +27,13 @@
  *     AGENT_GAMES_HMAC_SECRET is set in the Vercel project settings.
  *   - The seen-store fails soft on a read-only filesystem (see
  *     src/seen-store.ts): dedup still works in-memory per warm instance.
+ *   - Vercel legacy-server quirk (verified live 14 Nov 2026): when the
+ *     project runs as a legacy server (root entrypoint dist/server.js,
+ *     from package.json "main"), the rewrites in vercel.json
+ *     (/, /health, /agent -> /api/index) change the path the server
+ *     actually sees to "/api/index" — except "/" itself, which still
+ *     arrives as "/". normalizePath() below derives the route from the
+ *     HTTP method for those paths, so /health and /agent keep working.
  */
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -335,6 +342,28 @@ function requestPath(req: IncomingMessage): string {
 }
 
 /**
+ * Normalize a request path before routing.
+ *
+ * Vercel quirk (verified live 14 Nov 2026): when the project runs as a
+ * legacy server (root entrypoint dist/server.js, from package.json
+ * "main"), the rewrites in vercel.json (/, /health, /agent -> /api/index)
+ * change the path the server actually sees to "/api/index" — except for
+ * "/" itself, which still arrives as "/". The dispatcher therefore cannot
+ * tell /health from /agent by path alone; derive the route from the
+ * method instead: POST -> /agent (the only POST route), anything else ->
+ * /health. api/index.ts already does this same mapping for its own
+ * entrypoint; doing it here makes it hold for the legacy server too.
+ * Idempotent: already-normalized paths ("/agent", "/health", "/") pass
+ * through unchanged.
+ */
+function normalizePath(url: string, method?: string): string {
+  if (url === "/api/index" || url === "/api/index.ts" || url === "/api") {
+    return method === "POST" ? "/agent" : "/health";
+  }
+  return url;
+}
+
+/**
  * Per-request dispatcher. `getCtx` is invoked ONLY for POST /agent, so
  * GET /health and GET / work even when no config is available (serverless
  * lazy context). `pathOverride` lets a serverless entrypoint substitute
@@ -346,7 +375,7 @@ export async function dispatchRequest(
   getCtx: () => Ctx,
   pathOverride?: string,
 ): Promise<void> {
-  const url = pathOverride ?? requestPath(req);
+  const url = normalizePath(pathOverride ?? requestPath(req), req.method);
   try {
     if (req.method === "GET" && url === "/health") {
       sendJson(res, 200, { ok: true, service: "hayzenxcr-agent-games", protocolVersion: PROTOCOL_VERSION });
