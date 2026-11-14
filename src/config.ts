@@ -36,6 +36,22 @@ function env(name: string, fallback = ""): string {
   return v === undefined || v === "" ? fallback : v;
 }
 
+/**
+ * Create a directory when it does not exist. Fail-soft: on a serverless
+ * filesystem (read-only outside /tmp) creation can fail — the caller must
+ * tolerate a missing directory (SeenStore fails soft; circuit reads fail
+ * with a clear error if the artifacts are absent).
+ */
+function ensureDir(dir: string): void {
+  try {
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    console.warn(
+      `[config] could not create directory ${dir}: ${err instanceof Error ? err.message : err}`,
+    );
+  }
+}
+
 export function loadConfig(): Config {
   const hmacSecret = env("AGENT_GAMES_HMAC_SECRET");
   if (!hmacSecret) {
@@ -45,10 +61,13 @@ export function loadConfig(): Config {
     );
   }
   const circuitsDir = env("CIRCUITS_DIR", "./circuits");
-  const dataDir = env("DATA_DIR", "./data");
-  for (const dir of [circuitsDir, dataDir]) {
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  }
+  // On Vercel the filesystem is read-only outside /tmp, so the seen-store
+  // defaults there (per warm instance, ephemeral). Anywhere else: ./data.
+  const dataDir = env(
+    "DATA_DIR",
+    process.env.VERCEL === "1" ? "/tmp/agent-games-data" : "./data",
+  );
+  for (const dir of [circuitsDir, dataDir]) ensureDir(dir);
   return {
     port: Number(env("PORT", "8080")),
     hmacSecret,
