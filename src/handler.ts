@@ -172,7 +172,7 @@ async function handleGatekeeper(task: GatekeeperTask, ctx: Ctx): Promise<Json> {
 
   const budget = proofBudgetMs(task.deadline_at);
   try {
-    const circuitInput = gatekeeperCircuitInput(input, outcome.decision, outcome.reason_code);
+    const circuitInput = gatekeeperCircuitInput(input, outcome.decision, outcome.reason_code, task.task_id);
     const { proof, publicSignals } = await generateProof(
       circuitInput,
       circuitPath(ctx.config.circuitsDir, GATEKEEPER_WASM),
