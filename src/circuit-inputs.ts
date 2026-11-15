@@ -1,17 +1,17 @@
 /**
  * Circuit input mapping — SINGLE POINT OF PATCH (see CIRCUIT_INPUTS_TODO.md).
  *
- * ⚠️ TODO (UNCONFIRMED): the exact input signal names the platform's
- * Circom circuits expect have NOT been published in the build guide as of
- * 14 Nov 2026. These two functions are the ONLY place that maps a platform
- * task/turn onto snarkjs circuit inputs. Until the mapping is confirmed
- * against Practice Mode, both functions throw CircuitInputsTodoError.
+ * GATEKEEPER — CONFIRMED 15 Nov 2026 against the platform's own circuit
+ * artifacts + a live Practice Mode task: signal names recovered by probing
+ * the wasm's getInputSignalSize, encodings verified by groth16.verify
+ * against the real verification key (REJECT dec=0 and APPROVE dec=1 both
+ * verify; a REJECT on an all-pass vector asserts in the circuit, proving
+ * the circuit enforces the decision). See CIRCUIT_INPUTS_TODO.md.
  *
- * Everything else — decision logic, HMAC, response schemas, Kurier
- * submission, publicInputsHash — is fully implemented and unaffected.
- * Once the mapping is confirmed, fill in these two functions (and only
- * these) and re-run `npm run test:harness`.
+ * VFY-POLICY — still TODO (Steal-the-VFY entry is closed; STRATEGY_PARAMS
+ * also still unfilled). vfyCircuitInput still throws CircuitInputsTodoError.
  */
+import { keccak256, toHex } from "viem";
 import type { GatekeeperInput } from "./gatekeeper.js";
 import type { VfyAction, VfyState } from "./vfy.js";
 
@@ -29,16 +29,52 @@ export class CircuitInputsTodoError extends Error {
 /** Input object passed to snarkjs groth16.fullProve for the gatekeeper circuit. */
 export type CircuitInput = Record<string, unknown>;
 
+/** BN128 scalar field prime (snarkjs normalizes inputs mod this prime). */
+const FIELD_PRIME =
+  21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+
+/** task_id -> field element: UUID (128-bit) as a number; else keccak256 mod p. */
+function taskIdToField(taskId: string): string {
+  const stripped = taskId.replace(/-/g, "");
+  if (/^[0-9a-fA-F]+$/.test(stripped) && stripped.length > 0) {
+    return BigInt(`0x${stripped}`).toString();
+  }
+  return (BigInt(keccak256(toHex(taskId))) % FIELD_PRIME).toString();
+}
+
 /**
  * Map a Proof Gatekeeper task + its decision onto the gatekeeper circuit's
- * input signals. TODO: fill in once the signal names are confirmed.
+ * input signals (template GatekeeperEvaluation_79). CONFIRMED 15 Nov 2026:
+ * all 13 signals recovered from the wasm (inputSize 13 = nPublic 13) and
+ * verified end-to-end with snarkjs groth16.verify against the real vk.
+ *
+ * Encodings: *_hash / addresses are hex -> BigInt decimal (witness calc
+ * reduces mod p); numbers are decimal strings; decision APPROVE=1,
+ * REJECT=0; taskId is the UUID as a 128-bit number; salt is a private
+ * input, 0 (accepted by the circuit; not in public signals).
+ * Note: reason_code and proof_tx are NOT circuit inputs.
  */
 export function gatekeeperCircuitInput(
-  _task: GatekeeperInput,
-  _decision: "APPROVE" | "REJECT",
+  task: GatekeeperInput,
+  decision: "APPROVE" | "REJECT",
   _reasonCode: string,
+  taskId: string,
 ): CircuitInput {
-  throw new CircuitInputsTodoError("gatekeeper");
+  return {
+    registeredVkHash: BigInt(task.registered_vk).toString(),
+    proofVkHash: BigInt(task.proof_vk).toString(),
+    minimum: String(task.minimum),
+    publicBalance: String(task.public_balance),
+    expiryBlock: String(task.expiry_block),
+    currentBlock: String(task.current_block),
+    recipient: BigInt(task.recipient).toString(),
+    conditionRecipient: BigInt(task.condition_recipient).toString(),
+    amount: String(task.amount),
+    maxTransfer: String(task.max_transfer),
+    decision: decision === "APPROVE" ? "1" : "0",
+    taskId: taskIdToField(taskId),
+    salt: "0",
+  };
 }
 
 /**
